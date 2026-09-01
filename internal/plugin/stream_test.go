@@ -384,7 +384,7 @@ func newStopErrorSignalFlowServer() *httptest.Server {
 					"channel": channel,
 					"message": "synthetic stop failure",
 				})
-				return
+				<-request.Context().Done()
 			}
 		}
 	}))
@@ -430,7 +430,7 @@ func newStopChannelAbortSignalFlowServer() *httptest.Server {
 					"event":   "CHANNEL_ABORT",
 					"channel": channel,
 				})
-				return
+				<-request.Context().Done()
 			}
 		}
 	}))
