@@ -172,6 +172,28 @@ func TestCollectSignalFlowPropagatesErrorDuringStopDrain(t *testing.T) {
 	}
 }
 
+func TestCollectSignalFlowRejectsChannelAbortDuringStopDrain(t *testing.T) {
+	const program = "data('stop-aborted').publish()"
+	server := newStopChannelAbortSignalFlowServer()
+	defer server.Close()
+
+	client, err := signalflow.NewClient(
+		signalflow.StreamURL(strings.Replace(server.URL, "http://", "ws://", 1)),
+		signalflow.AccessToken("abcd"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = collectSignalFlow(context.Background(), client, Config{
+		Query: program, Duration: 1, Aggregator: "latest",
+	}, testLogger())
+	if !errors.Is(err, signalflow.ErrChannelAborted) {
+		t.Fatalf("error = %v, want channel-aborted error", err)
+	}
+}
+
 func TestCollectSignalFlowHonorsContextBeforeExecute(t *testing.T) {
 	client, err := signalflow.NewClient(
 		signalflow.StreamURL("ws://127.0.0.1:9"),
@@ -361,6 +383,52 @@ func newStopErrorSignalFlowServer() *httptest.Server {
 					"type":    "error",
 					"channel": channel,
 					"message": "synthetic stop failure",
+				})
+				return
+			}
+		}
+	}))
+}
+
+func newStopChannelAbortSignalFlowServer() *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+
+		var channel string
+		for {
+			_, payload, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return
+			}
+			switch message.Type {
+			case "authenticate":
+				_ = connection.WriteJSON(map[string]string{"type": "authenticated"})
+			case "execute":
+				channel = message.Channel
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "JOB_START",
+					"channel": channel,
+					"handle":  "handle-stop-abort",
+				})
+				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
+			case "stop":
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "CHANNEL_ABORT",
+					"channel": channel,
 				})
 				return
 			}

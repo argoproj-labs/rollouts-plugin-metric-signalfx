@@ -9,7 +9,7 @@ An out-of-tree RPC metric provider that evaluates bounded SignalFlow programs ag
 
 ## Behavior
 
-- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds, stops the computation, drains buffered messages (up to 2 seconds), and starts a discard drain if that cleanup bound is reached so client shutdown can complete without a blocked buffer. It then reduces numeric payloads to one value using `aggregator` and evaluates the value through Argo Rollouts `evaluate.EvaluateResult`.
+- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds, stops the computation, and drains all computation channels for up to 2 seconds before reducing numeric payloads to one value using `aggregator` and evaluating the value through Argo Rollouts `evaluate.EvaluateResult`. If the cleanup bound is reached, the run returns an error while client shutdown closes the channels and lets the cleanup owner finish.
 - Empty data, unsupported value types, non-finite values, stream errors, and deadline expiry return `AnalysisPhaseError`.
 - A failed SignalFlow computation propagates its error without transparent retries. The controller's analysis retry policy remains authoritative.
 - `Resume`, `Terminate`, and `GarbageCollect` are idempotent no-ops. Measurements are finite and not persisted by the plugin.
@@ -26,7 +26,7 @@ The JSON object under `metric.provider.plugin["argoproj-labs/rollouts-plugin-met
 | `accessToken` | yes unless `SIGNALFX_ACCESS_TOKEN` is set | Access token for the realm |
 | `duration` | yes | Positive integer seconds for the measurement window |
 | `aggregator` | yes | One of `max`, `min`, `avg`, `sum`, `count`, `latest` |
-| `streamURL` | no | Full WebSocket endpoint override for a tested non-default deployment. With Secret-backed authentication, its host must be the SignalFlow host derived from `realm`; an explicit inline token may use a local test endpoint. Must be `ws://` or `wss://` with a host. |
+| `streamURL` | no | Full WebSocket endpoint override for a tested non-default deployment. With Secret-backed authentication, it must use `wss://` and its host must be the SignalFlow host derived from `realm`; an explicit inline token may use a local test endpoint. Must have a host. |
 
 `aggregator` semantics across the window:
 

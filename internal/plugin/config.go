@@ -84,6 +84,9 @@ func parseConfigJSON(raw json.RawMessage, envToken string) (Config, error) {
 			if strings.TrimSpace(config.Realm) == "" {
 				return Config{}, fmt.Errorf("config field 'realm' is required when streamURL uses environment authentication")
 			}
+			if streamURL.Scheme != "wss" {
+				return Config{}, fmt.Errorf("config field 'streamURL' must use wss with environment authentication")
+			}
 			if !strings.EqualFold(streamURL.Host, signalFlowHost(config.Realm)) {
 				return Config{}, fmt.Errorf("config field 'streamURL' host must match the SignalFlow host for realm")
 			}

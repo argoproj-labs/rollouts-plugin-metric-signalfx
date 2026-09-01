@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,8 @@ const (
 	streamMargin = 10 * time.Second
 	drainTimeout = 2 * time.Second
 )
+
+var errComputationDrainTimeout = errors.New("timed out draining SignalFlow computation")
 
 func newSignalFlowClient(config Config, logCtx log.Entry) (*signalflow.Client, error) {
 	var streamParam signalflow.ClientParam
@@ -98,7 +101,7 @@ func collectSignalFlow(ctx context.Context, client *signalflow.Client, config Co
 	dataCh := comp.Data()
 
 	timedOut := func() (float64, error) {
-		if err := stopAndDrain(comp, nil, logCtx); err != nil {
+		if err := stopAndDrain(comp, nil, logCtx); err != nil && !errors.Is(err, errComputationDrainTimeout) {
 			return 0, err
 		}
 		return 0, fmt.Errorf("stream completed before the configured window: %w", streamCtx.Err())
@@ -123,7 +126,7 @@ loop:
 		case message, ok := <-dataCh:
 			if !ok {
 				if compErr := comp.Err(); compErr != nil {
-					return 0, compErr
+					return 0, fmt.Errorf("SignalFlow stream closed before the configured window: %w", compErr)
 				}
 				return 0, fmt.Errorf("SignalFlow stream closed before the configured window")
 			}
@@ -141,34 +144,72 @@ func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessa
 	stopCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 
+	processErr := make(chan error, 1)
+	drainErr := make(chan error, 1)
+	go func() {
+		drainErr <- drainComputation(comp, process, processErr)
+	}()
+
 	if err := comp.Stop(stopCtx); err != nil {
 		logCtx.WithError(err).Info("failed to stop SignalFlow computation")
 	}
 
-	dataCh := comp.Data()
-	for {
+	select {
+	case err := <-processErr:
+		return err
+	case err := <-drainErr:
+		return err
+	case <-stopCtx.Done():
 		select {
-		case message, ok := <-dataCh:
-			if !ok {
-				return comp.Err()
-			}
-			if process != nil {
-				if err := process(message); err != nil {
-					startBackgroundDataDrain(dataCh)
-					return err
-				}
-			}
-		case <-stopCtx.Done():
-			logCtx.Info("gave up draining SignalFlow data channel after stop")
-			startBackgroundDataDrain(dataCh)
-			return comp.Err()
+		case err := <-processErr:
+			return err
+		case err := <-drainErr:
+			return err
+		default:
 		}
+		logCtx.Info("gave up draining SignalFlow computation after stop")
+		return fmt.Errorf("%w after %s", errComputationDrainTimeout, drainTimeout)
 	}
 }
 
-func startBackgroundDataDrain(dataCh <-chan *messages.DataMessage) {
-	go func() {
-		for range dataCh {
+func drainComputation(comp *signalflow.Computation, process func(*messages.DataMessage) error, processErr chan<- error) error {
+	dataCh := comp.Data()
+	infoCh := comp.Info()
+	eventCh := comp.Events()
+	expirationCh := comp.Expirations()
+	var firstProcessErr error
+
+	for dataCh != nil || infoCh != nil || eventCh != nil || expirationCh != nil {
+		select {
+		case message, ok := <-dataCh:
+			if !ok {
+				dataCh = nil
+				continue
+			}
+			if process == nil || firstProcessErr != nil {
+				continue
+			}
+			firstProcessErr = process(message)
+			if firstProcessErr != nil {
+				processErr <- firstProcessErr
+			}
+		case _, ok := <-infoCh:
+			if !ok {
+				infoCh = nil
+			}
+		case _, ok := <-eventCh:
+			if !ok {
+				eventCh = nil
+			}
+		case _, ok := <-expirationCh:
+			if !ok {
+				expirationCh = nil
+			}
 		}
-	}()
+	}
+
+	if firstProcessErr != nil {
+		return firstProcessErr
+	}
+	return comp.Err()
 }

@@ -28,5 +28,10 @@ func main() {
 	})
 	mux.Handle("/", fake)
 
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	if certFile != "" && keyFile != "" {
+		log.Fatal(http.ListenAndServeTLS(address, certFile, keyFile, mux))
+	}
 	log.Fatal(http.ListenAndServe(address, mux))
 }

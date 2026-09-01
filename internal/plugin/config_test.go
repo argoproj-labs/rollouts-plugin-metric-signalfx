@@ -45,6 +45,12 @@ func TestParseConfigJSON(t *testing.T) {
 			envToken: "from-env",
 			want:     Config{Query: "data('demo').publish()", Realm: "us0", StreamURL: "wss://stream.us0.signalfx.com/v2/signalflow", AccessToken: "from-env", Duration: 60, Aggregator: "sum"},
 		},
+		{
+			name:     "environment token rejects insecure matching stream URL",
+			raw:      `{"query":"data('demo').publish()","realm":"us0","streamURL":"ws://stream.us0.signalfx.com/v2/signalflow","duration":60,"aggregator":"sum"}`,
+			envToken: "from-env",
+			wantErr:  "config field 'streamURL' must use wss with environment authentication",
+		},
 		{name: "malformed JSON", raw: `{`, wantErr: "failed to parse plugin config"},
 		{name: "missing query", raw: `{"realm":"us0","accessToken":"secret-value","duration":60,"aggregator":"avg"}`, wantErr: "config field 'query' is required"},
 		{name: "blank query", raw: `{"query":"  ","realm":"us0","accessToken":"secret-value","duration":60,"aggregator":"avg"}`, wantErr: "config field 'query' is required"},
