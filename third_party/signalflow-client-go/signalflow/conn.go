@@ -50,7 +50,11 @@ func (c *wsConn) Run(ctx context.Context) {
 	for {
 		if conn != nil {
 			conn.Close()
-			time.Sleep(reconnectDelay)
+			select {
+			case <-time.After(reconnectDelay):
+			case <-ctx.Done():
+				return
+			}
 		}
 		// This will get run on before the first connection as well.
 		if c.PostDisconnectCallback != nil {
@@ -76,8 +80,8 @@ func (c *wsConn) Run(ctx context.Context) {
 			continue
 		}
 
-		err = c.readAndWriteMessages(conn)
-		if err == nil {
+		err = c.readAndWriteMessages(ctx, conn)
+		if err == nil || ctx.Err() != nil {
 			return
 		}
 		c.sendErrIfWanted(fmt.Errorf("Error in SignalFlow websocket: %w", err))
@@ -89,12 +93,21 @@ type messageWithType struct {
 	msgType int
 }
 
-func (c *wsConn) readAndWriteMessages(conn *websocket.Conn) error {
+func (c *wsConn) readAndWriteMessages(ctx context.Context, conn *websocket.Conn) error {
 	readMessageCh := make(chan messageWithType)
 	readErrCh := make(chan error)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	readCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	connectionDone := make(chan struct{})
+	defer close(connectionDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-connectionDone:
+		}
+	}()
 
 	go func() {
 		for {
@@ -102,27 +115,41 @@ func (c *wsConn) readAndWriteMessages(conn *websocket.Conn) error {
 			if err != nil {
 				select {
 				case readErrCh <- err:
-				case <-ctx.Done():
+				case <-readCtx.Done():
 				}
 				return
 			}
-			readMessageCh <- messageWithType{
+			select {
+			case readMessageCh <- messageWithType{
 				bytes:   bytes,
 				msgType: typ,
+			}:
+			case <-readCtx.Done():
+				return
 			}
 		}
 	}()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case msg, ok := <-readMessageCh:
 			if !ok {
 				return nil
 			}
 			if msg.msgType == websocket.TextMessage {
-				c.IncomingTextMsgs <- msg.bytes
+				select {
+				case c.IncomingTextMsgs <- msg.bytes:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			} else {
-				c.IncomingBinaryMsgs <- msg.bytes
+				select {
+				case c.IncomingBinaryMsgs <- msg.bytes:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		case err := <-readErrCh:
 			return err
@@ -131,7 +158,11 @@ func (c *wsConn) readAndWriteMessages(conn *websocket.Conn) error {
 				return nil
 			}
 			err := c.writeMessage(conn, msg.bytes)
-			msg.resultCh <- err
+			select {
+			case msg.resultCh <- err:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			if err != nil {
 				return err
 			}

@@ -1,13 +1,15 @@
 .PHONY: fmt test vet build clean
 
 fmt:
-	gofmt -w main.go rpc_test.go rpc_binary_test.go internal/plugin/*.go test/fake-signalflow/*.go
+	gofmt -w main.go rpc_test.go rpc_binary_test.go internal/plugin/*.go test/fake-signalflow/*.go third_party/signalflow-client-go/signalflow/*.go third_party/signalflow-client-go/signalflow/messages/*.go
 
 test:
 	go test -race ./...
+	cd third_party/signalflow-client-go && go test -race ./...
 
 vet:
 	go vet ./...
+	cd third_party/signalflow-client-go && go vet ./...
 
 build:
 	mkdir -p dist

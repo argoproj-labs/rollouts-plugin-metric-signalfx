@@ -132,7 +132,12 @@ func parseBinaryHeader(msg []byte) (string, bool /* isCompressed */, bool /* isJ
 	isCompressed := header.Flags&compressed != 0
 	isJSON := header.Flags&jsonEncoded != 0
 
-	return string(header.Channel[:bytes.IndexByte(header.Channel[:], 0)]), isCompressed, isJSON, msg[20:], err
+	channelEnd := bytes.IndexByte(header.Channel[:], 0)
+	if channelEnd < 0 {
+		channelEnd = len(header.Channel)
+	}
+
+	return string(header.Channel[:channelEnd]), isCompressed, isJSON, msg[20:], err
 }
 
 func parseBinaryMessage(msg []byte) (Message, error) {
@@ -155,6 +160,9 @@ func parseBinaryMessage(msg []byte) (Message, error) {
 	if isJSON {
 		return nil, errors.New("cannot handle json binary message")
 	}
+	if len(rest) < 12 {
+		return nil, fmt.Errorf("expected SignalFlow data header of 12 bytes, got %d bytes", len(rest))
+	}
 
 	r := bytes.NewReader(rest[:12])
 	var header DataMessageHeader
@@ -163,14 +171,21 @@ func parseBinaryMessage(msg []byte) (Message, error) {
 		return nil, err
 	}
 
-	var payloads []DataPayload
-	for i := 0; i < int(header.ElementCount); i++ {
-		r := bytes.NewReader(rest[12+17*i : 12+17*(i+1)])
+	payloadSize := uint64(header.ElementCount) * uint64(binary.Size(DataPayload{}))
+	if payloadSize > uint64(len(rest)-12) {
+		return nil, fmt.Errorf("expected %d bytes of SignalFlow payloads, got %d bytes", payloadSize, len(rest)-12)
+	}
+
+	payloads := make([]DataPayload, 0, int(header.ElementCount))
+	payloadOffset := 12
+	for i := uint32(0); i < header.ElementCount; i++ {
+		r := bytes.NewReader(rest[payloadOffset : payloadOffset+binary.Size(DataPayload{})])
 		var payload DataPayload
 		if err := binary.Read(r, binary.BigEndian, &payload); err != nil {
 			return nil, err
 		}
 		payloads = append(payloads, payload)
+		payloadOffset += binary.Size(DataPayload{})
 	}
 
 	return &DataMessage{

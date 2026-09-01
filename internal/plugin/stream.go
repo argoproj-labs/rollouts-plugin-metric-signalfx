@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	streamMargin = 10 * time.Second
-	drainTimeout = 2 * time.Second
+	streamMargin             = 10 * time.Second
+	drainTimeout             = 2 * time.Second
+	maxDurationSeconds int64 = (1<<63 - 1 - int64(streamMargin)) / int64(time.Second)
 )
 
 var errComputationDrainTimeout = errors.New("timed out draining SignalFlow computation")

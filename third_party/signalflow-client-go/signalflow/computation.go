@@ -223,18 +223,7 @@ func (c *Computation) processMessage(m messages.Message) error {
 		}
 		c.infoChBuffer <- v
 	case *messages.ErrorMessage:
-		rawData := v.RawData()
-		computationError := ComputationError{}
-		if code, ok := rawData["error"]; ok {
-			computationError.Code = int(code.(float64))
-		}
-		if msg, ok := rawData["message"]; ok && msg != nil {
-			computationError.Message = msg.(string)
-		}
-		if errType, ok := rawData["errorType"]; ok {
-			computationError.ErrorType = errType.(string)
-		}
-		return &computationError
+		return parseComputationError(v)
 	case *messages.MetadataMessage:
 		c.Lock()
 		if _, ok := c.tsidMetadata[v.TSID]; !ok {
@@ -246,6 +235,48 @@ func (c *Computation) processMessage(m messages.Message) error {
 		c.eventChBuffer <- v
 	}
 	return nil
+}
+
+func parseComputationError(message *messages.ErrorMessage) error {
+	rawData := message.RawData()
+	if rawData == nil {
+		return &ComputationError{
+			Code:      message.Error,
+			Message:   message.Message,
+			ErrorType: message.ErrorType,
+		}
+	}
+
+	computationError := ComputationError{
+		Code:      message.Error,
+		Message:   message.Message,
+		ErrorType: message.ErrorType,
+	}
+	if code, ok := rawData["error"]; ok {
+		if code == nil {
+			return errors.New("invalid SignalFlow error code")
+		}
+		codeValue, ok := code.(float64)
+		if !ok {
+			return errors.New("invalid SignalFlow error code")
+		}
+		computationError.Code = int(codeValue)
+	}
+	if msg, ok := rawData["message"]; ok && msg != nil {
+		messageValue, ok := msg.(string)
+		if !ok {
+			return errors.New("invalid SignalFlow error message")
+		}
+		computationError.Message = messageValue
+	}
+	if errType, ok := rawData["errorType"]; ok && errType != nil {
+		errorTypeValue, ok := errType.(string)
+		if !ok {
+			return errors.New("invalid SignalFlow error type")
+		}
+		computationError.ErrorType = errorTypeValue
+	}
+	return &computationError
 }
 
 func bufferMessages[T any](in chan *T, out chan *T) {

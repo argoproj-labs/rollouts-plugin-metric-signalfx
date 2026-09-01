@@ -144,6 +144,12 @@ go vet ./...
 go test ./... -run TestBuiltPluginBinaryUsesFakeSignalFlow -count=1 -v
 ```
 
+The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to reject channel aborts. Its regression tests run as a nested module:
+
+```bash
+(cd third_party/signalflow-client-go && go test -race ./...)
+```
+
 For a controller-level smoke test, install Docker, kind, and kubectl, start a local Docker runtime, and run:
 
 ```bash

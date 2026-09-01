@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -129,5 +130,13 @@ func TestValidateStreamURL(t *testing.T) {
 				t.Fatalf("validateStreamURL(%q) error = %v, wantErr %v", test.value, err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseConfigRejectsDurationOverflow(t *testing.T) {
+	raw := json.RawMessage(fmt.Sprintf(`{"query":"data('demo').publish()","realm":"us0","accessToken":"token","duration":%d,"aggregator":"avg"}`, int64(9223372030)))
+	_, err := parseConfigJSON(raw, "")
+	if err == nil || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("error = %v, want duration overflow error", err)
 	}
 }

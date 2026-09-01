@@ -66,6 +66,9 @@ func parseConfigJSON(raw json.RawMessage, envToken string) (Config, error) {
 	if config.Duration <= 0 {
 		return Config{}, fmt.Errorf("config field 'duration' must be greater than zero")
 	}
+	if int64(config.Duration) > maxDurationSeconds {
+		return Config{}, fmt.Errorf("config field 'duration' is too large")
+	}
 	if _, ok := supportedAggregators[config.Aggregator]; !ok {
 		return Config{}, fmt.Errorf("config field 'aggregator' must be one of max, min, avg, sum, count, latest")
 	}

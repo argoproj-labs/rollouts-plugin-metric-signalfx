@@ -250,6 +250,7 @@ func (c *Client) handleMessage(msgBytes []byte, msgTyp int) error {
 	if cm, ok := message.(messages.ChannelMessage); ok {
 		channelName := cm.Channel()
 		c.Lock()
+		defer c.Unlock()
 		channel, ok := c.channelsByName[channelName]
 		if !ok {
 			// The channel should have existed before, but now doesn't,
@@ -260,7 +261,6 @@ func (c *Client) handleMessage(msgBytes []byte, msgTyp int) error {
 			return nil
 		}
 		channel <- message
-		c.Unlock()
 	} else {
 		return c.acceptMessage(message)
 	}
