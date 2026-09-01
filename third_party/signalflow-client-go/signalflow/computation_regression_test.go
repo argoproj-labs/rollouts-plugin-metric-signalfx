@@ -34,3 +34,25 @@ func TestComputationRejectsMalformedErrorPayload(t *testing.T) {
 		t.Fatalf("computation error = %v, want malformed error message", computation.Err())
 	}
 }
+
+func TestComputationRejectsMalformedGroupByMissingProperty(t *testing.T) {
+	channel := make(chan messages.Message, 1)
+	computation := newComputation(channel, "ch-1", &Client{})
+
+	message, err := messages.ParseMessage([]byte(`{"type":"message","channel":"ch-1","message":{"messageCode":"GROUPBY_MISSING_PROPERTY","contents":{"propertyNames":[42]}}}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel <- message
+
+	deadline := time.Now().Add(time.Second)
+	for computation.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if computation.Err() == nil {
+		t.Fatal("malformed GROUPBY_MISSING_PROPERTY payload did not stop the computation")
+	}
+	if !strings.Contains(computation.Err().Error(), "invalid SignalFlow") {
+		t.Fatalf("computation error = %v, want malformed protocol error", computation.Err())
+	}
+}

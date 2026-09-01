@@ -219,7 +219,11 @@ func (c *Computation) processMessage(m messages.Message) error {
 		case messages.FindMatchedNoTimeseries:
 			c.matchedNoTimeseriesQuery.Set(v.MessageBlock.Contents.(messages.FindMatchedNoTimeseriesContents).MatchedNoTimeseriesQuery())
 		case messages.GroupByMissingProperty:
-			c.groupByMissingProperties.Set(v.MessageBlock.Contents.(messages.GroupByMissingPropertyContents).GroupByMissingProperties())
+			properties, err := v.MessageBlock.Contents.(messages.GroupByMissingPropertyContents).GroupByMissingPropertiesWithError()
+			if err != nil {
+				return fmt.Errorf("invalid SignalFlow GROUPBY_MISSING_PROPERTY contents: %w", err)
+			}
+			c.groupByMissingProperties.Set(properties)
 		}
 		c.infoChBuffer <- v
 	case *messages.ErrorMessage:

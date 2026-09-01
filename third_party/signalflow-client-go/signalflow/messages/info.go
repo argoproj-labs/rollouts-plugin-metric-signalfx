@@ -5,6 +5,8 @@ package messages
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -110,11 +112,25 @@ func (jm FindMatchedNoTimeseriesContents) MatchedNoTimeseriesQuery() string {
 type GroupByMissingPropertyContents map[string]interface{}
 
 func (jm GroupByMissingPropertyContents) GroupByMissingProperties() []string {
-	propNames := make([]string, len(jm["propertyNames"].([]interface{})))
-	for i, v := range jm["propertyNames"].([]interface{}) {
-		propNames[i] = v.(string)
-	}
+	propNames, _ := jm.GroupByMissingPropertiesWithError()
 	return propNames
+}
+
+func (jm GroupByMissingPropertyContents) GroupByMissingPropertiesWithError() ([]string, error) {
+	rawPropertyNames, ok := jm["propertyNames"].([]interface{})
+	if !ok {
+		return nil, errors.New("propertyNames must be an array")
+	}
+
+	propNames := make([]string, len(rawPropertyNames))
+	for i, value := range rawPropertyNames {
+		propertyName, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("propertyNames[%d] must be a string", i)
+		}
+		propNames[i] = propertyName
+	}
+	return propNames, nil
 }
 
 // ExpiredTSIDMessage is received when a timeseries has expired and is no

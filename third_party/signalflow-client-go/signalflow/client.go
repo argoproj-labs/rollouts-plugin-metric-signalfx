@@ -226,9 +226,13 @@ func (c *Client) sendMessage(ctx context.Context, message interface{}) error {
 		bytes:    msgBytes,
 		resultCh: resultCh,
 	}:
-		return <-resultCh
+		select {
+		case err := <-resultCh:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	case <-ctx.Done():
-		close(resultCh)
 		return ctx.Err()
 	}
 }
@@ -299,12 +303,20 @@ func (c *Client) Execute(ctx context.Context, req *ExecuteRequest) (*Computation
 		req.Channel = c.newUniqueChannelName()
 	}
 
+	channel := c.registerChannel(req.Channel)
+	computation := newComputation(channel, req.Channel, c)
 	err := c.sendMessage(ctx, req)
 	if err != nil {
+		c.Lock()
+		if registeredChannel, ok := c.channelsByName[req.Channel]; ok && registeredChannel == channel {
+			delete(c.channelsByName, req.Channel)
+			close(channel)
+		}
+		c.Unlock()
 		return nil, err
 	}
 
-	return newComputation(c.registerChannel(req.Channel), req.Channel, c), nil
+	return computation, nil
 }
 
 // Detach from a computation but keep it running.  See
