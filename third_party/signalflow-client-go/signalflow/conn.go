@@ -50,15 +50,14 @@ func (c *wsConn) Run(ctx context.Context) {
 	for {
 		if conn != nil {
 			conn.Close()
+			if c.PostDisconnectCallback != nil {
+				c.PostDisconnectCallback()
+			}
 			select {
 			case <-time.After(reconnectDelay):
 			case <-ctx.Done():
 				return
 			}
-		}
-		// This will get run on before the first connection as well.
-		if c.PostDisconnectCallback != nil {
-			c.PostDisconnectCallback()
 		}
 
 		if ctx.Err() != nil {
