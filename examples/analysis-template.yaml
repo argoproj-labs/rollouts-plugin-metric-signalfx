@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: signalfx-latency
+spec:
+  metrics:
+    - name: p95-latency
+      interval: 5m
+      successCondition: result < 200
+      failureLimit: 1
+      provider:
+        plugin:
+          argoproj-labs/rollouts-plugin-metric-signalfx:
+            realm: us0
+            query: |
+              data('demo.trans.latency').max().publish()
+            duration: 60
+            aggregator: latest
