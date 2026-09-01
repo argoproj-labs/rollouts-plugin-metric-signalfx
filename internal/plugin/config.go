@@ -56,7 +56,8 @@ func parseConfigJSON(raw json.RawMessage, envToken string) (Config, error) {
 	if strings.TrimSpace(config.Query) == "" {
 		return Config{}, fmt.Errorf("config field 'query' is required")
 	}
-	if strings.TrimSpace(config.AccessToken) == "" {
+	inlineToken := strings.TrimSpace(config.AccessToken) != ""
+	if !inlineToken {
 		config.AccessToken = envToken
 	}
 	if strings.TrimSpace(config.AccessToken) == "" {
@@ -68,10 +69,24 @@ func parseConfigJSON(raw json.RawMessage, envToken string) (Config, error) {
 	if _, ok := supportedAggregators[config.Aggregator]; !ok {
 		return Config{}, fmt.Errorf("config field 'aggregator' must be one of max, min, avg, sum, count, latest")
 	}
+	if config.Realm != "" {
+		if err := validateRealm(config.Realm); err != nil {
+			return Config{}, err
+		}
+	}
 
 	if config.StreamURL != "" {
-		if err := validateStreamURL(config.StreamURL); err != nil {
+		streamURL, err := parseStreamURL(config.StreamURL)
+		if err != nil {
 			return Config{}, err
+		}
+		if !inlineToken {
+			if strings.TrimSpace(config.Realm) == "" {
+				return Config{}, fmt.Errorf("config field 'realm' is required when streamURL uses environment authentication")
+			}
+			if !strings.EqualFold(streamURL.Host, signalFlowHost(config.Realm)) {
+				return Config{}, fmt.Errorf("config field 'streamURL' host must match the SignalFlow host for realm")
+			}
 		}
 		return config, nil
 	}
@@ -83,15 +98,45 @@ func parseConfigJSON(raw json.RawMessage, envToken string) (Config, error) {
 }
 
 func validateStreamURL(value string) error {
+	_, err := parseStreamURL(value)
+	return err
+}
+
+func parseStreamURL(value string) (*url.URL, error) {
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return fmt.Errorf("config field 'streamURL' is invalid: %w", err)
+		return nil, fmt.Errorf("config field 'streamURL' is invalid: %w", err)
 	}
 	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
-		return fmt.Errorf("config field 'streamURL' must use ws or wss")
+		return nil, fmt.Errorf("config field 'streamURL' must use ws or wss")
 	}
-	if parsed.Host == "" {
-		return fmt.Errorf("config field 'streamURL' must include a host")
+	if parsed.Host == "" || parsed.Hostname() == "" {
+		return nil, fmt.Errorf("config field 'streamURL' must include a host")
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("config field 'streamURL' must not include user info")
+	}
+	return parsed, nil
+}
+
+func validateRealm(realm string) error {
+	if len(realm) == 0 || len(realm) > 63 {
+		return fmt.Errorf("config field 'realm' is invalid")
+	}
+	for index := range realm {
+		character := realm[index]
+		isLetter := character >= 'a' && character <= 'z'
+		isDigit := character >= '0' && character <= '9'
+		if !isLetter && !isDigit && character != '-' {
+			return fmt.Errorf("config field 'realm' is invalid")
+		}
+		if character == '-' && (index == 0 || index == len(realm)-1) {
+			return fmt.Errorf("config field 'realm' is invalid")
+		}
 	}
 	return nil
+}
+
+func signalFlowHost(realm string) string {
+	return "stream." + realm + ".signalfx.com"
 }

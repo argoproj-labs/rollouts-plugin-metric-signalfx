@@ -39,6 +39,12 @@ func TestParseConfigJSON(t *testing.T) {
 			raw:  `{"query":"data('demo').publish()","streamURL":"ws://127.0.0.1:8080/signalflow","accessToken":"inline","duration":60,"aggregator":"sum"}`,
 			want: Config{Query: "data('demo').publish()", StreamURL: "ws://127.0.0.1:8080/signalflow", AccessToken: "inline", Duration: 60, Aggregator: "sum"},
 		},
+		{
+			name:     "matching stream URL with environment token",
+			raw:      `{"query":"data('demo').publish()","realm":"us0","streamURL":"wss://stream.us0.signalfx.com/v2/signalflow","duration":60,"aggregator":"sum"}`,
+			envToken: "from-env",
+			want:     Config{Query: "data('demo').publish()", Realm: "us0", StreamURL: "wss://stream.us0.signalfx.com/v2/signalflow", AccessToken: "from-env", Duration: 60, Aggregator: "sum"},
+		},
 		{name: "malformed JSON", raw: `{`, wantErr: "failed to parse plugin config"},
 		{name: "missing query", raw: `{"realm":"us0","accessToken":"secret-value","duration":60,"aggregator":"avg"}`, wantErr: "config field 'query' is required"},
 		{name: "blank query", raw: `{"query":"  ","realm":"us0","accessToken":"secret-value","duration":60,"aggregator":"avg"}`, wantErr: "config field 'query' is required"},
@@ -47,6 +53,9 @@ func TestParseConfigJSON(t *testing.T) {
 		{name: "negative duration", raw: `{"query":"data('demo').publish()","realm":"us0","accessToken":"secret-value","duration":-1,"aggregator":"avg"}`, wantErr: "config field 'duration' must be greater than zero"},
 		{name: "unsupported aggregator", raw: `{"query":"data('demo').publish()","realm":"us0","accessToken":"secret-value","duration":60,"aggregator":"median"}`, wantErr: "config field 'aggregator' must be one of max, min, avg, sum, count, latest"},
 		{name: "missing realm", raw: `{"query":"data('demo').publish()","accessToken":"secret-value","duration":60,"aggregator":"avg"}`, wantErr: "config field 'realm' is required when streamURL is empty"},
+		{name: "environment token requires realm for custom stream URL", raw: `{"query":"data('demo').publish()","streamURL":"ws://127.0.0.1:8080/signalflow","duration":60,"aggregator":"sum"}`, envToken: "from-env", wantErr: "config field 'realm' is required when streamURL uses environment authentication"},
+		{name: "environment token rejects unrelated stream URL", raw: `{"query":"data('demo').publish()","realm":"us0","streamURL":"wss://attacker.example/signalflow","duration":60,"aggregator":"sum"}`, envToken: "from-env", wantErr: "config field 'streamURL' host must match the SignalFlow host for realm"},
+		{name: "realm rejects URL authority injection", raw: `{"query":"data('demo').publish()","realm":"us0.signalfx.com@attacker.example/","duration":60,"aggregator":"sum"}`, envToken: "from-env", wantErr: "config field 'realm' is invalid"},
 	}
 
 	for _, test := range tests {
@@ -104,6 +113,7 @@ func TestValidateStreamURL(t *testing.T) {
 		{name: "HTTP", value: "http://example.com", wantErr: true},
 		{name: "missing host", value: "wss:///signalflow", wantErr: true},
 		{name: "malformed", value: "://bad", wantErr: true},
+		{name: "user info", value: "wss://user@example.com/signalflow", wantErr: true},
 	}
 
 	for _, test := range tests {

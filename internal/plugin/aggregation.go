@@ -9,40 +9,98 @@ func aggregate(values []float64, aggregator string) (float64, error) {
 	if len(values) == 0 {
 		return 0, fmt.Errorf("query returned no data points")
 	}
-	if _, ok := supportedAggregators[aggregator]; !ok {
-		return 0, fmt.Errorf("invalid aggregator: %q", aggregator)
-	}
 
-	minValue := values[0]
-	maxValue := values[0]
-	sum := 0.0
+	state, err := newAggregationState(aggregator)
+	if err != nil {
+		return 0, err
+	}
 	for _, value := range values {
-		if !isFinite(value) {
-			return 0, fmt.Errorf("query returned a non-finite value")
-		}
-		minValue = math.Min(minValue, value)
-		maxValue = math.Max(maxValue, value)
-		sum += value
-		if !isFinite(sum) {
-			return 0, fmt.Errorf("aggregated sum is non-finite")
+		if err := state.add(value); err != nil {
+			return 0, err
 		}
 	}
+	return state.result()
+}
 
-	switch aggregator {
+type aggregationState struct {
+	aggregator string
+	count      int
+	minValue   float64
+	maxValue   float64
+	mean       float64
+	sum        float64
+	latest     float64
+}
+
+func newAggregationState(aggregator string) (*aggregationState, error) {
+	if _, ok := supportedAggregators[aggregator]; !ok {
+		return nil, fmt.Errorf("invalid aggregator: %q", aggregator)
+	}
+	return &aggregationState{aggregator: aggregator}, nil
+}
+
+func (s *aggregationState) add(value float64) error {
+	if !isFinite(value) {
+		return fmt.Errorf("query returned a non-finite value")
+	}
+	if s.count == 0 {
+		s.count = 1
+		s.minValue = value
+		s.maxValue = value
+		s.mean = value
+		s.sum = value
+		s.latest = value
+		return nil
+	}
+
+	switch s.aggregator {
 	case "max":
-		return maxValue, nil
+		s.maxValue = math.Max(s.maxValue, value)
 	case "min":
-		return minValue, nil
+		s.minValue = math.Min(s.minValue, value)
 	case "avg":
-		return sum / float64(len(values)), nil
+		nextCount := float64(s.count + 1)
+		nextMean := (s.mean / nextCount * float64(s.count)) + value/nextCount
+		if !isFinite(nextMean) {
+			return fmt.Errorf("aggregated average is non-finite")
+		}
+		s.mean = nextMean
 	case "sum":
-		return sum, nil
+		nextSum := s.sum + value
+		if !isFinite(nextSum) {
+			return fmt.Errorf("aggregated sum is non-finite")
+		}
+		s.sum = nextSum
 	case "count":
-		return float64(len(values)), nil
 	case "latest":
-		return values[len(values)-1], nil
+		s.latest = value
 	default:
-		return 0, fmt.Errorf("invalid aggregator: %q", aggregator)
+		return fmt.Errorf("invalid aggregator: %q", s.aggregator)
+	}
+	s.count++
+	return nil
+}
+
+func (s *aggregationState) result() (float64, error) {
+	if s.count == 0 {
+		return 0, fmt.Errorf("query returned no data points")
+	}
+
+	switch s.aggregator {
+	case "max":
+		return s.maxValue, nil
+	case "min":
+		return s.minValue, nil
+	case "avg":
+		return s.mean, nil
+	case "sum":
+		return s.sum, nil
+	case "count":
+		return float64(s.count), nil
+	case "latest":
+		return s.latest, nil
+	default:
+		return 0, fmt.Errorf("invalid aggregator: %q", s.aggregator)
 	}
 }
 

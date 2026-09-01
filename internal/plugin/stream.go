@@ -63,35 +63,44 @@ func payloadValues(message *messages.DataMessage) ([]float64, error) {
 }
 
 func collectSignalFlow(ctx context.Context, client *signalflow.Client, config Config, logCtx log.Entry) (float64, error) {
-	comp, err := client.Execute(ctx, &signalflow.ExecuteRequest{
+	streamDuration := time.Duration(config.Duration) * time.Second
+	streamCtx, cancel := context.WithTimeout(ctx, streamDuration+streamMargin)
+	defer cancel()
+
+	aggregation, err := newAggregationState(config.Aggregator)
+	if err != nil {
+		return 0, err
+	}
+
+	comp, err := client.Execute(streamCtx, &signalflow.ExecuteRequest{
 		Program: config.Query,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("could not execute SignalFlow program: %w", err)
 	}
 
-	streamDuration := time.Duration(config.Duration) * time.Second
-	streamCtx, cancel := context.WithTimeout(ctx, streamDuration+streamMargin)
-	defer cancel()
-
 	stopTimer := time.NewTimer(streamDuration)
 	defer stopTimer.Stop()
 
-	var values []float64
-
 	process := func(message *messages.DataMessage) error {
-		converted, err := payloadValues(message)
+		values, err := payloadValues(message)
 		if err != nil {
 			return err
 		}
-		values = append(values, converted...)
+		for _, value := range values {
+			if err := aggregation.add(value); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
 	dataCh := comp.Data()
 
 	timedOut := func() (float64, error) {
-		_ = stopAndDrain(comp, nil, logCtx)
+		if err := stopAndDrain(comp, nil, logCtx); err != nil {
+			return 0, err
+		}
 		return 0, fmt.Errorf("stream completed before the configured window: %w", streamCtx.Err())
 	}
 
@@ -116,7 +125,7 @@ loop:
 				if compErr := comp.Err(); compErr != nil {
 					return 0, compErr
 				}
-				break loop
+				return 0, fmt.Errorf("SignalFlow stream closed before the configured window")
 			}
 			if err := process(message); err != nil {
 				_ = stopAndDrain(comp, nil, logCtx)
@@ -125,7 +134,7 @@ loop:
 		}
 	}
 
-	return aggregate(values, config.Aggregator)
+	return aggregation.result()
 }
 
 func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessage) error, logCtx log.Entry) error {
@@ -139,25 +148,27 @@ func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessa
 	dataCh := comp.Data()
 	for {
 		select {
-		case <-stopCtx.Done():
-			logCtx.Info("gave up draining SignalFlow data channel after stop")
-			return nil
-		default:
-		}
-
-		select {
 		case message, ok := <-dataCh:
 			if !ok {
-				return nil
+				return comp.Err()
 			}
 			if process != nil {
 				if err := process(message); err != nil {
+					startBackgroundDataDrain(dataCh)
 					return err
 				}
 			}
 		case <-stopCtx.Done():
 			logCtx.Info("gave up draining SignalFlow data channel after stop")
-			return nil
+			startBackgroundDataDrain(dataCh)
+			return comp.Err()
 		}
 	}
+}
+
+func startBackgroundDataDrain(dataCh <-chan *messages.DataMessage) {
+	go func() {
+		for range dataCh {
+		}
+	}()
 }

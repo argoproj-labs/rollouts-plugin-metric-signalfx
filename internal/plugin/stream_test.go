@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -127,6 +128,70 @@ func TestCollectSignalFlowReturnsComputationError(t *testing.T) {
 	}
 }
 
+func TestCollectSignalFlowRejectsPrematureChannelAbort(t *testing.T) {
+	const program = "data('aborted').publish()"
+	server := newPrematureChannelAbortServer()
+	defer server.Close()
+
+	client, err := signalflow.NewClient(
+		signalflow.StreamURL(strings.Replace(server.URL, "http://", "ws://", 1)),
+		signalflow.AccessToken("abcd"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = collectSignalFlow(context.Background(), client, Config{
+		Query: program, Duration: 5, Aggregator: "latest",
+	}, testLogger())
+	if err == nil || !strings.Contains(err.Error(), "stream closed before the configured window") {
+		t.Fatalf("error = %v, want premature stream closure error", err)
+	}
+}
+
+func TestCollectSignalFlowPropagatesErrorDuringStopDrain(t *testing.T) {
+	const program = "data('stop-error').publish()"
+	server := newStopErrorSignalFlowServer()
+	defer server.Close()
+
+	client, err := signalflow.NewClient(
+		signalflow.StreamURL(strings.Replace(server.URL, "http://", "ws://", 1)),
+		signalflow.AccessToken("abcd"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err = collectSignalFlow(context.Background(), client, Config{
+		Query: program, Duration: 1, Aggregator: "latest",
+	}, testLogger())
+	if err == nil || !strings.Contains(err.Error(), "synthetic stop failure") {
+		t.Fatalf("error = %v, want stop-drain computation error", err)
+	}
+}
+
+func TestCollectSignalFlowHonorsContextBeforeExecute(t *testing.T) {
+	client, err := signalflow.NewClient(
+		signalflow.StreamURL("ws://127.0.0.1:9"),
+		signalflow.AccessToken("abcd"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = collectSignalFlow(ctx, client, Config{
+		Query: "data('unavailable').publish()", Duration: 1, Aggregator: "latest",
+	}, testLogger())
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+}
+
 func TestCollectSignalFlowReturnsAfterContextCancellation(t *testing.T) {
 	const program = "data('slow').publish()"
 	client, fake := newFakeClient(t, program, map[idtool.ID]float64{idtool.ID(1): 42})
@@ -212,6 +277,113 @@ func newErrorSignalFlowServer() *httptest.Server {
 			}
 		}
 	}))
+}
+
+func newPrematureChannelAbortServer() *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+
+		for {
+			_, payload, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return
+			}
+			switch message.Type {
+			case "authenticate":
+				_ = connection.WriteJSON(map[string]string{"type": "authenticated"})
+			case "execute":
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "JOB_START",
+					"channel": message.Channel,
+					"handle":  "handle-abort",
+				})
+				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(message.Channel, 42))
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "CHANNEL_ABORT",
+					"channel": message.Channel,
+				})
+				return
+			}
+		}
+	}))
+}
+
+func newStopErrorSignalFlowServer() *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+
+		var channel string
+		for {
+			_, payload, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return
+			}
+			switch message.Type {
+			case "authenticate":
+				_ = connection.WriteJSON(map[string]string{"type": "authenticated"})
+			case "execute":
+				channel = message.Channel
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "JOB_START",
+					"channel": channel,
+					"handle":  "handle-stop-error",
+				})
+				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
+			case "stop":
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "error",
+					"channel": channel,
+					"message": "synthetic stop failure",
+				})
+				return
+			}
+		}
+	}))
+}
+
+func binaryDataMessage(channel string, value float64) []byte {
+	var channelBytes [16]byte
+	copy(channelBytes[:], channel)
+	payload := doublePayload(value)
+	message := bytes.NewBuffer(nil)
+	_ = binary.Write(message, binary.BigEndian, &messages.BinaryMessageHeader{
+		Version:     1,
+		MessageType: 5,
+		Channel:     channelBytes,
+	})
+	_ = binary.Write(message, binary.BigEndian, &messages.DataMessageHeader{
+		TimestampMillis: 1,
+		ElementCount:    1,
+	})
+	_ = binary.Write(message, binary.BigEndian, &payload)
+	return message.Bytes()
 }
 
 func doublePayload(value float64) messages.DataPayload {
