@@ -144,7 +144,7 @@ make vet
 go test ./... -run TestBuiltPluginBinaryUsesFakeSignalFlow -count=1 -v
 ```
 
-The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to reject channel aborts. Its regression tests are included by `make test` and can also be run directly as a nested module:
+The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to distinguish an expected `STOPPED` completion from an unexpected channel abort. Its regression tests are included by `make test` and can also be run directly as a nested module:
 
 ```bash
 (cd third_party/signalflow-client-go && go test -race ./...)

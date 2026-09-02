@@ -159,18 +159,26 @@ func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessa
 	case err := <-processErr:
 		return err
 	case err := <-drainErr:
-		return err
+		return expectedStopDrainError(err)
 	case <-stopCtx.Done():
 		select {
 		case err := <-processErr:
 			return err
 		case err := <-drainErr:
-			return err
+			return expectedStopDrainError(err)
 		default:
 		}
 		logCtx.Info("gave up draining SignalFlow computation after stop")
 		return fmt.Errorf("%w after %s", errComputationDrainTimeout, drainTimeout)
 	}
+}
+
+func expectedStopDrainError(err error) error {
+	var abortErr *signalflow.ChannelAbortError
+	if errors.As(err, &abortErr) && abortErr.State == "STOPPED" {
+		return nil
+	}
+	return err
 }
 
 func drainComputation(comp *signalflow.Computation, process func(*messages.DataMessage) error, processErr chan<- error) error {

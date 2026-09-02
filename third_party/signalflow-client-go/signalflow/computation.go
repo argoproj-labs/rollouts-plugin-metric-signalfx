@@ -190,6 +190,22 @@ var (
 	ErrSignalFlowConnectionClosed = errors.New("SignalFlow connection closed")
 )
 
+type ChannelAbortError struct {
+	State  string
+	Reason string
+}
+
+func (e *ChannelAbortError) Error() string {
+	if e.State == "" && e.Reason == "" {
+		return ErrChannelAborted.Error()
+	}
+	return fmt.Sprintf("%s: state=%s reason=%s", ErrChannelAborted, e.State, e.Reason)
+}
+
+func (e *ChannelAbortError) Unwrap() error {
+	return ErrChannelAborted
+}
+
 func (c *Computation) processMessage(m messages.Message) error {
 	switch v := m.(type) {
 	case *messages.JobStartControlMessage:
@@ -197,7 +213,10 @@ func (c *Computation) processMessage(m messages.Message) error {
 	case *messages.EndOfChannelControlMessage:
 		return errChannelClosed
 	case *messages.ChannelAbortControlMessage:
-		return ErrChannelAborted
+		return &ChannelAbortError{
+			State:  v.AbortInfo.State,
+			Reason: v.AbortInfo.Reason,
+		}
 	case *messages.DataMessage:
 		c.dataChBuffer <- v
 	case *messages.ExpiredTSIDMessage:
