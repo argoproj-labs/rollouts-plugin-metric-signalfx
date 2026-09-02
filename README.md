@@ -51,10 +51,10 @@ data:
   metricProviderPlugins: |-
     - name: "argoproj-labs/rollouts-plugin-metric-signalfx"
       location: "https://github.com/argoproj-labs/rollouts-plugin-metric-signalfx/releases/download/v0.2.0/metric-plugin-linux-amd64"
-      sha256: "68384494927b6f0ad6f7daa11476d62ce7ab4e599b76336624eb67d47f55e04c"
+      sha256: "bcafd5eff3c686181a4baa5237eeaddd0833de9760c4046f4246d8d07fcd0d17"
 ```
 
-For arm64 nodes, use `metric-plugin-linux-arm64` with checksum `59d08fcb6052167f0196fec2f301059b3f79c4f1dcc4ee6967c2c351dd6acf83`. For unreleased or development use, omit `sha256`.
+For arm64 nodes, use `metric-plugin-linux-arm64` with checksum `1b8f926af2239abd69fb18b129aecf06ca9b18bfaf8a097645ddc7c6f2f4b011`. For unreleased or development use, omit `sha256`.
 
 ### File location
 
