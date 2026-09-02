@@ -1,0 +1,6 @@
+dist/
+coverage.out
+metric-plugin
+.DS_Store
+.idea/
+.vscode/

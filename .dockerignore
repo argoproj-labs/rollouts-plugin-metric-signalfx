@@ -1,0 +1,7 @@
+.git
+.github
+dist
+docs
+examples
+*.md
+LICENSE
