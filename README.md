@@ -9,7 +9,7 @@ An out-of-tree RPC metric provider that evaluates bounded SignalFlow programs ag
 
 ## Behavior
 
-- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds, stops the computation, and drains all computation channels for up to 2 seconds before reducing numeric payloads to one value using `aggregator` and evaluating the value through Argo Rollouts `evaluate.EvaluateResult`. If the cleanup bound is reached, the run returns an error while client shutdown closes the channels and lets the cleanup owner finish.
+- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds while incrementally reducing numeric payloads to one value using `aggregator`, stops the computation, and drains all computation channels for up to 2 seconds before evaluating the accumulated value through Argo Rollouts `evaluate.EvaluateResult`. If the cleanup bound is reached, the run returns an error while client shutdown closes the channels and lets the cleanup owner finish.
 - Empty data, unsupported value types, non-finite values, stream errors, and deadline expiry return `AnalysisPhaseError`.
 - A failed SignalFlow computation propagates its error without transparent retries. The controller's analysis retry policy remains authoritative.
 - `Resume`, `Terminate`, and `GarbageCollect` are idempotent no-ops. Measurements are finite and not persisted by the plugin.
@@ -22,11 +22,11 @@ The JSON object under `metric.provider.plugin["argoproj-labs/rollouts-plugin-met
 | Field | Required | Description |
 | --- | --- | --- |
 | `query` | yes | SignalFlow program containing the published result to measure |
-| `realm` | yes unless `streamURL` is set with an explicit inline `accessToken` | Splunk Observability realm, e.g. `us0`. Required with Secret-backed authentication, including custom endpoints. |
+| `realm` | yes unless `streamURL` is set with an explicit inline `accessToken` | Splunk Observability realm, e.g. `us0`. Use up to 63 lowercase letters, digits, or hyphens, without a leading or trailing hyphen. Required with Secret-backed authentication, including custom endpoints. |
 | `accessToken` | yes unless `SIGNALFX_ACCESS_TOKEN` is set | Access token for the realm |
-| `duration` | yes | Positive integer seconds for the measurement window |
+| `duration` | yes | Positive integer seconds for the measurement window; the value must leave room for the 10-second timeout margin |
 | `aggregator` | yes | One of `max`, `min`, `avg`, `sum`, `count`, `latest` |
-| `streamURL` | no | Full WebSocket endpoint override for a tested non-default deployment. With Secret-backed authentication, it must use `wss://` and its host must be the SignalFlow host derived from `realm`; an explicit inline token may use a local test endpoint. Must have a host. |
+| `streamURL` | no | Full WebSocket endpoint override for a tested non-default deployment. It must use `ws://` or `wss://`, include a host, and omit user info. With Secret-backed authentication, it must use `wss://` and its host must be the SignalFlow host derived from `realm`; an explicit inline token may use a local test endpoint. |
 
 `aggregator` semantics across the window:
 
@@ -134,8 +134,8 @@ The example query and thresholds are illustrative. Substitute a SignalFlow progr
 The automated suite does not contact Splunk Observability Cloud. It uses the SignalFlow client's `FakeBackend` to exercise data collection, aggregation, provider phase mapping, and executable RPC behavior. Protocol-valid computation errors are covered by a test-only WebSocket handler, not `FakeBackend`.
 
 ```bash
-go test -race ./...
-go vet ./...
+make test
+make vet
 ```
 
 `TestBuiltPluginBinaryUsesFakeSignalFlow` also builds the current executable, launches it as a separate go-plugin process, connects it to a fake SignalFlow WebSocket server, and verifies an Argo-compatible measurement of `42`:
@@ -144,26 +144,26 @@ go vet ./...
 go test ./... -run TestBuiltPluginBinaryUsesFakeSignalFlow -count=1 -v
 ```
 
-The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to reject channel aborts. Its regression tests run as a nested module:
+The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to reject channel aborts. Its regression tests are included by `make test` and can also be run directly as a nested module:
 
 ```bash
 (cd third_party/signalflow-client-go && go test -race ./...)
 ```
 
-For a controller-level smoke test, install Docker, kind, and kubectl, start a local Docker runtime, and run:
+For a controller-level smoke test, install Docker, kind, kubectl, and OpenSSL, start a local Docker runtime, and run:
 
 ```bash
 bash test/kind-smoke.sh
 ```
 
-The script builds a test-only fake SignalFlow service, creates the disposable `argo-sfx-smoke` cluster, installs Argo Rollouts v1.10.0, downloads the public v0.2.0 plugin binary with its architecture-specific checksum, injects the fake token through a Kubernetes Secret, and runs a one-shot `AnalysisRun` that must finish `Successful` with value `42`. It deletes the cluster on exit. This validates plugin download, RPC startup, Secret environment propagation, WebSocket connectivity, and Argo wiring; it does not validate live Splunk authentication or metric ingestion.
+The script builds a test-only fake SignalFlow service, creates the disposable `argo-sfx-smoke` cluster, installs Argo Rollouts v1.10.0, downloads the public v0.2.0 plugin binary with its architecture-specific checksum, injects the fake token through a Kubernetes Secret, and runs a one-shot `AnalysisRun` that must finish `Successful` with value `42`. It deletes the cluster on exit. This validates plugin download, RPC startup, Secret environment propagation, TLS WebSocket connectivity, and Argo wiring; it does not validate live Splunk authentication or metric ingestion.
 
 ## Building and verifying locally
 
 ```bash
 make fmt
-go test -race ./...
-go vet ./...
+make test
+make vet
 make build
 ```
 

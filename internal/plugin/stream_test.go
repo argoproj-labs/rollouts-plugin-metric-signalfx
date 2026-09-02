@@ -295,7 +295,7 @@ func newErrorSignalFlowServer() *httptest.Server {
 					"message": "synthetic SignalFlow failure",
 					"channel": message.Channel,
 				})
-				return
+				<-request.Context().Done()
 			}
 		}
 	}))
