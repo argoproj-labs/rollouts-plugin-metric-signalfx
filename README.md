@@ -9,7 +9,7 @@ An out-of-tree RPC metric provider that evaluates bounded SignalFlow programs ag
 
 ## Behavior
 
-- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds while incrementally reducing numeric payloads to one value using `aggregator`, stops the computation, and drains all computation channels for up to 2 seconds before evaluating the accumulated value through Argo Rollouts `evaluate.EvaluateResult`. If the cleanup bound is reached, the run returns an error while client shutdown closes the channels and lets the cleanup owner finish.
+- Each `Run` parses one metric configuration, creates one SignalFlow client, executes the configured program, consumes `Computation.Data()` for the configured `duration` in seconds while incrementally reducing numeric payloads to one value using `aggregator`, stops the computation, and drains all computation channels for up to 2 seconds before evaluating the accumulated value through Argo Rollouts `evaluate.EvaluateResult`. A `CHANNEL_ABORT` with `sf_job_abortState` `STOPPED` is normal completion only when its reason matches the plugin's successfully issued stop; genuine and premature channel aborts remain errors. If the cleanup bound is reached, the run returns an error while client shutdown closes the channels and lets the cleanup owner finish.
 - Empty data, unsupported value types, non-finite values, stream errors, and deadline expiry return `AnalysisPhaseError`.
 - A failed SignalFlow computation propagates its error without transparent retries. The controller's analysis retry policy remains authoritative.
 - `Resume`, `Terminate`, and `GarbageCollect` are idempotent no-ops. Measurements are finite and not persisted by the plugin.
@@ -144,7 +144,7 @@ make vet
 go test ./... -run TestBuiltPluginBinaryUsesFakeSignalFlow -count=1 -v
 ```
 
-The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to reject channel aborts. Its regression tests are included by `make test` and can also be run directly as a nested module:
+The repository carries a small Apache-licensed source copy of SignalFlow client v2.3.0 because the upstream client does not expose computation termination reasons needed to correlate a `STOPPED` abort with the plugin's stop request and reject other channel aborts. Its regression tests are included by `make test` and can also be run directly as a nested module:
 
 ```bash
 (cd third_party/signalflow-client-go && go test -race ./...)
