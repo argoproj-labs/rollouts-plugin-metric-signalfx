@@ -219,6 +219,31 @@ func TestCollectSignalFlowAcceptsExpectedStopChannelAbort(t *testing.T) {
 	}
 }
 
+func TestExpectedStopDrainErrorRequiresIssuedMatchingStop(t *testing.T) {
+	const stopReason = "rollouts-plugin-window-complete-test"
+	abortErr := &signalflow.ChannelAbortError{State: "STOPPED", Reason: stopReason}
+
+	tests := []struct {
+		name       string
+		stopIssued bool
+		reason     string
+		wantNil    bool
+	}{
+		{name: "stop not issued", reason: stopReason},
+		{name: "reason does not match", stopIssued: true, reason: "external stop"},
+		{name: "issued matching stop", stopIssued: true, reason: stopReason, wantNil: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := expectedStopDrainError(abortErr, test.stopIssued, test.reason)
+			if (got == nil) != test.wantNil {
+				t.Fatalf("expectedStopDrainError() = %v, want nil: %t", got, test.wantNil)
+			}
+		})
+	}
+}
+
 func TestCollectSignalFlowHonorsContextBeforeExecute(t *testing.T) {
 	client, err := signalflow.NewClient(
 		signalflow.StreamURL("ws://127.0.0.1:9"),
@@ -450,10 +475,14 @@ func newStopChannelAbortSignalFlowServer() *httptest.Server {
 				})
 				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
 			case "stop":
-				_ = connection.WriteJSON(map[string]string{
+				_ = connection.WriteJSON(map[string]interface{}{
 					"type":    "control-message",
 					"event":   "CHANNEL_ABORT",
 					"channel": channel,
+					"abortInfo": map[string]string{
+						"sf_job_abortReason": "external stop",
+						"sf_job_abortState":  "STOPPED",
+					},
 				})
 				<-request.Context().Done()
 			}
@@ -496,12 +525,18 @@ func newExpectedStopChannelAbortSignalFlowServer() *httptest.Server {
 				})
 				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
 			case "stop":
+				var stopMessage struct {
+					Reason string `json:"reason"`
+				}
+				if err := json.Unmarshal(payload, &stopMessage); err != nil {
+					return
+				}
 				_ = connection.WriteJSON(map[string]interface{}{
 					"type":    "control-message",
 					"event":   "CHANNEL_ABORT",
 					"channel": channel,
 					"abortInfo": map[string]string{
-						"sf_job_abortReason": "debug stop",
+						"sf_job_abortReason": stopMessage.Reason,
 						"sf_job_abortState":  "STOPPED",
 					},
 				})
