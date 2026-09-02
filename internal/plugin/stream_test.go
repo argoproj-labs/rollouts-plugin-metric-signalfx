@@ -194,6 +194,56 @@ func TestCollectSignalFlowRejectsChannelAbortDuringStopDrain(t *testing.T) {
 	}
 }
 
+func TestCollectSignalFlowAcceptsExpectedStopChannelAbort(t *testing.T) {
+	const program = "data('stop-stopped').publish()"
+	server := newExpectedStopChannelAbortSignalFlowServer()
+	defer server.Close()
+
+	client, err := signalflow.NewClient(
+		signalflow.StreamURL(strings.Replace(server.URL, "http://", "ws://", 1)),
+		signalflow.AccessToken("abcd"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	got, err := collectSignalFlow(context.Background(), client, Config{
+		Query: program, Duration: 1, Aggregator: "latest",
+	}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 42 {
+		t.Fatalf("collectSignalFlow() = %v, want 42", got)
+	}
+}
+
+func TestExpectedStopDrainErrorRequiresIssuedMatchingStop(t *testing.T) {
+	const stopReason = "rollouts-plugin-window-complete-test"
+	abortErr := &signalflow.ChannelAbortError{State: "STOPPED", Reason: stopReason}
+
+	tests := []struct {
+		name       string
+		stopIssued bool
+		reason     string
+		wantNil    bool
+	}{
+		{name: "stop not issued", reason: stopReason},
+		{name: "reason does not match", stopIssued: true, reason: "external stop"},
+		{name: "issued matching stop", stopIssued: true, reason: stopReason, wantNil: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := expectedStopDrainError(abortErr, test.stopIssued, test.reason)
+			if (got == nil) != test.wantNil {
+				t.Fatalf("expectedStopDrainError() = %v, want nil: %t", got, test.wantNil)
+			}
+		})
+	}
+}
+
 func TestCollectSignalFlowHonorsContextBeforeExecute(t *testing.T) {
 	client, err := signalflow.NewClient(
 		signalflow.StreamURL("ws://127.0.0.1:9"),
@@ -425,10 +475,70 @@ func newStopChannelAbortSignalFlowServer() *httptest.Server {
 				})
 				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
 			case "stop":
-				_ = connection.WriteJSON(map[string]string{
+				_ = connection.WriteJSON(map[string]interface{}{
 					"type":    "control-message",
 					"event":   "CHANNEL_ABORT",
 					"channel": channel,
+					"abortInfo": map[string]string{
+						"sf_job_abortReason": "external stop",
+						"sf_job_abortState":  "STOPPED",
+					},
+				})
+				<-request.Context().Done()
+			}
+		}
+	}))
+}
+
+func newExpectedStopChannelAbortSignalFlowServer() *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+
+		var channel string
+		for {
+			_, payload, err := connection.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message struct {
+				Type    string `json:"type"`
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return
+			}
+			switch message.Type {
+			case "authenticate":
+				_ = connection.WriteJSON(map[string]string{"type": "authenticated"})
+			case "execute":
+				channel = message.Channel
+				_ = connection.WriteJSON(map[string]string{
+					"type":    "control-message",
+					"event":   "JOB_START",
+					"channel": channel,
+					"handle":  "handle-stop-stopped",
+				})
+				_ = connection.WriteMessage(websocket.BinaryMessage, binaryDataMessage(channel, 42))
+			case "stop":
+				var stopMessage struct {
+					Reason string `json:"reason"`
+				}
+				if err := json.Unmarshal(payload, &stopMessage); err != nil {
+					return
+				}
+				_ = connection.WriteJSON(map[string]interface{}{
+					"type":    "control-message",
+					"event":   "CHANNEL_ABORT",
+					"channel": channel,
+					"abortInfo": map[string]string{
+						"sf_job_abortReason": stopMessage.Reason,
+						"sf_job_abortState":  "STOPPED",
+					},
 				})
 				<-request.Context().Done()
 			}

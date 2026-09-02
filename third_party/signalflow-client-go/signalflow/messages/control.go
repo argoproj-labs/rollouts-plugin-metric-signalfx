@@ -28,6 +28,12 @@ type EndOfChannelControlMessage struct {
 	BaseControlMessage
 }
 
+type ChannelAbortInfo struct {
+	Reason string `json:"sf_job_abortReason"`
+	State  string `json:"sf_job_abortState"`
+}
+
 type ChannelAbortControlMessage struct {
 	BaseControlMessage
+	AbortInfo ChannelAbortInfo `json:"abortInfo"`
 }

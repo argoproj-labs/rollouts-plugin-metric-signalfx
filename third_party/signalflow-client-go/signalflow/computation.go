@@ -163,8 +163,9 @@ func (c *Computation) TSIDMetadata(ctx context.Context, tsid idtool.ID) (*messag
 	return md.Get(ctx)
 }
 
-// Err returns the last fatal error that caused the computation to stop, if
-// any.  Will be nil if the computation stopped in an expected manner.
+// Err returns the last error that caused the computation to stop, if any.
+// A normal END_OF_CHANNEL completion returns nil. CHANNEL_ABORT messages are
+// returned as *ChannelAbortError with their server-provided state and reason.
 func (c *Computation) Err() error {
 	c.errMutex.RLock()
 	defer c.errMutex.RUnlock()
@@ -190,6 +191,24 @@ var (
 	ErrSignalFlowConnectionClosed = errors.New("SignalFlow connection closed")
 )
 
+// ChannelAbortError reports the state and reason from a CHANNEL_ABORT control
+// message. It unwraps to ErrChannelAborted for sentinel-based checks.
+type ChannelAbortError struct {
+	State  string
+	Reason string
+}
+
+func (e *ChannelAbortError) Error() string {
+	if e.State == "" && e.Reason == "" {
+		return ErrChannelAborted.Error()
+	}
+	return fmt.Sprintf("%s: state=%s reason=%s", ErrChannelAborted, e.State, e.Reason)
+}
+
+func (e *ChannelAbortError) Unwrap() error {
+	return ErrChannelAborted
+}
+
 func (c *Computation) processMessage(m messages.Message) error {
 	switch v := m.(type) {
 	case *messages.JobStartControlMessage:
@@ -197,7 +216,10 @@ func (c *Computation) processMessage(m messages.Message) error {
 	case *messages.EndOfChannelControlMessage:
 		return errChannelClosed
 	case *messages.ChannelAbortControlMessage:
-		return ErrChannelAborted
+		return &ChannelAbortError{
+			State:  v.AbortInfo.State,
+			Reason: v.AbortInfo.Reason,
+		}
 	case *messages.DataMessage:
 		c.dataChBuffer <- v
 	case *messages.ExpiredTSIDMessage:
