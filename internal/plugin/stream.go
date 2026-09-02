@@ -144,6 +144,7 @@ loop:
 func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessage) error, logCtx log.Entry) error {
 	stopCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
+	stopReason := fmt.Sprintf("rollouts-plugin-window-complete-%d", time.Now().UnixNano())
 
 	processErr := make(chan error, 1)
 	drainErr := make(chan error, 1)
@@ -151,26 +152,36 @@ func stopAndDrain(comp *signalflow.Computation, process func(*messages.DataMessa
 		drainErr <- drainComputation(comp, process, processErr)
 	}()
 
-	if err := comp.Stop(stopCtx); err != nil {
-		logCtx.WithError(err).Info("failed to stop SignalFlow computation")
+	stopErr := comp.StopWithReason(stopCtx, stopReason)
+	stopIssued := stopErr == nil
+	if stopErr != nil {
+		logCtx.WithError(stopErr).Info("failed to stop SignalFlow computation")
 	}
 
 	select {
 	case err := <-processErr:
 		return err
 	case err := <-drainErr:
-		return err
+		return expectedStopDrainError(err, stopIssued, stopReason)
 	case <-stopCtx.Done():
 		select {
 		case err := <-processErr:
 			return err
 		case err := <-drainErr:
-			return err
+			return expectedStopDrainError(err, stopIssued, stopReason)
 		default:
 		}
 		logCtx.Info("gave up draining SignalFlow computation after stop")
 		return fmt.Errorf("%w after %s", errComputationDrainTimeout, drainTimeout)
 	}
+}
+
+func expectedStopDrainError(err error, stopIssued bool, stopReason string) error {
+	var abortErr *signalflow.ChannelAbortError
+	if stopIssued && errors.As(err, &abortErr) && abortErr.State == "STOPPED" && abortErr.Reason == stopReason {
+		return nil
+	}
+	return err
 }
 
 func drainComputation(comp *signalflow.Computation, process func(*messages.DataMessage) error, processErr chan<- error) error {
